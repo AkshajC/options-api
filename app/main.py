@@ -4,6 +4,7 @@ import structlog
 from apscheduler.schedulers.background import BackgroundScheduler
 from fastapi import FastAPI
 
+from app.api.options import router as options_router
 from app.core.config import settings
 from app.core.database import Base, engine
 import app.models.options  # noqa: F401 — registers models with Base
@@ -36,6 +37,8 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG, lifespan=lifespan)
+
+app.include_router(options_router, prefix="/options", tags=["options"])
 
 
 @app.get("/health")
