@@ -1,70 +1,87 @@
+import math
 import time
-import structlog
-import httpx
+from datetime import datetime
 
-from app.core.config import settings
+import structlog
+import yfinance as yf
 
 log = structlog.get_logger(__name__)
 
-_BASE_URL = "https://api.polygon.io"
 _MAX_RETRIES = 3
 _RETRY_BACKOFF = [1.0, 2.0, 4.0]  # seconds between attempts
 
 
-def _get(client: httpx.Client, url: str, params: dict) -> dict:
-    """GET with retry on 429 rate-limit responses."""
-    params = {**params, "apiKey": settings.DATA_PROVIDER_API_KEY}
+def _or_none(val) -> float | int | None:
+    """Convert pandas NaN / inf to None so values are DB-safe."""
+    try:
+        return None if math.isnan(float(val)) else val
+    except (TypeError, ValueError):
+        return None
 
+
+def _fetch_chain_with_retry(yticker: yf.Ticker, expiry: str) -> object:
+    """Call option_chain with simple retry on transient failures."""
+    last_exc: Exception | None = None
     for attempt, wait in enumerate(_RETRY_BACKOFF, start=1):
-        response = client.get(url, params=params)
-
-        if response.status_code == 429:
-            if attempt <= _MAX_RETRIES:
-                log.warning(
-                    "rate_limit_hit",
-                    url=url,
-                    attempt=attempt,
-                    retry_in=wait,
-                )
-                time.sleep(wait)
-                continue
-            response.raise_for_status()
-
-        response.raise_for_status()
-        return response.json()
-
-    # unreachable, but satisfies type checkers
-    raise RuntimeError("Exceeded retry attempts")  # pragma: no cover
+        try:
+            return yticker.option_chain(expiry)
+        except Exception as exc:
+            last_exc = exc
+            log.warning(
+                "fetch_chain.retry",
+                expiry=expiry,
+                attempt=attempt,
+                error=str(exc),
+                retry_in=wait,
+            )
+            time.sleep(wait)
+    raise RuntimeError(f"Failed to fetch chain after {_MAX_RETRIES} attempts") from last_exc
 
 
 def fetch_options_chain(ticker: str) -> list[dict]:
     """
-    Fetch the full options chain snapshot for *ticker* from Polygon.io.
+    Fetch the full options chain for *ticker* via yfinance.
 
-    Paginates automatically and returns all contract snapshots as a flat list.
-    Each item is the raw dict from Polygon's /v3/snapshot/options response.
+    Iterates over every available expiration date and combines calls and puts
+    into a flat list of dicts. Keys match the OptionsContract model fields;
+    fields not available from yfinance (greeks, is_live) are omitted so the
+    caller can apply its own defaults.
 
     Raises:
-        httpx.HTTPStatusError: on non-retryable HTTP errors.
+        RuntimeError: if all retry attempts for any expiration are exhausted.
     """
     ticker = ticker.upper()
-    url = f"{_BASE_URL}/v3/snapshot/options/{ticker}"
-    params: dict = {"limit": 250}
+    yticker = yf.Ticker(ticker)
+
+    expiry_dates: tuple[str, ...] = yticker.options
+    if not expiry_dates:
+        log.warning("fetch_options_chain.no_expirations", ticker=ticker)
+        return []
+
+    log.info("fetch_options_chain.start", ticker=ticker, expirations=len(expiry_dates))
     results: list[dict] = []
 
-    with httpx.Client(timeout=15.0) as client:
-        log.info("fetch_options_chain.start", ticker=ticker)
+    for expiry in expiry_dates:
+        expiry_date = datetime.fromisoformat(expiry)
+        chain = _fetch_chain_with_retry(yticker, expiry)
 
-        while url:
-            data = _get(client, url, params)
+        for df, option_type in [(chain.calls, "call"), (chain.puts, "put")]:
+            for row in df.itertuples(index=False):
+                results.append(
+                    dict(
+                        ticker=ticker,
+                        contract_symbol=row.contractSymbol,
+                        option_type=option_type,
+                        strike_price=_or_none(row.strike),
+                        expiry_date=expiry_date,
+                        bid=_or_none(row.bid),
+                        ask=_or_none(row.ask),
+                        last_price=_or_none(row.lastPrice),
+                        volume=_or_none(row.volume),
+                        open_interest=_or_none(row.openInterest),
+                        implied_volatility=_or_none(row.impliedVolatility),
+                    )
+                )
 
-            results.extend(data.get("results", []))
-
-            # Polygon returns a next_url for pagination; it already contains
-            # all query params, so we clear params for subsequent requests.
-            url = data.get("next_url", "")
-            params = {}
-
-        log.info("fetch_options_chain.done", ticker=ticker, contracts=len(results))
-
+    log.info("fetch_options_chain.done", ticker=ticker, contracts=len(results))
     return results

@@ -22,32 +22,18 @@ def _is_market_hours() -> bool:
 
 
 def _map_contract(ticker: str, raw: dict, snapshot_time: datetime) -> dict:
-    """Extract fields from a Polygon /v3/snapshot/options result dict."""
-    details = raw.get("details", {})
-    greeks = raw.get("greeks", {})
-    last_quote = raw.get("last_quote", {})
-    last_trade = raw.get("last_trade", {})
-    day = raw.get("day", {})
-
-    return dict(
-        ticker=ticker,
-        contract_symbol=details.get("ticker", ""),
-        option_type=details.get("contract_type", ""),
-        strike_price=details.get("strike_price"),
-        expiry_date=datetime.fromisoformat(details["expiration_date"]),
-        bid=last_quote.get("bid"),
-        ask=last_quote.get("ask"),
-        last_price=last_trade.get("price"),
-        volume=day.get("volume"),
-        open_interest=raw.get("open_interest"),
-        implied_volatility=raw.get("implied_volatility"),
-        delta=greeks.get("delta"),
-        gamma=greeks.get("gamma"),
-        theta=greeks.get("theta"),
-        vega=greeks.get("vega"),
-        snapshot_time=snapshot_time,
-        is_live=last_quote.get("timeframe") == "REAL-TIME",
-    )
+    """Merge fetcher output with fields the fetcher does not provide."""
+    return {
+        **raw,
+        "ticker": ticker,
+        "snapshot_time": snapshot_time,
+        # yfinance does not supply greeks or a live-quote flag
+        "delta": raw.get("delta"),
+        "gamma": raw.get("gamma"),
+        "theta": raw.get("theta"),
+        "vega": raw.get("vega"),
+        "is_live": raw.get("is_live", False),
+    }
 
 
 def _upsert_contracts(db, ticker: str, raw_contracts: list[dict], snapshot_time: datetime) -> int:
