@@ -3,11 +3,12 @@ from datetime import date
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
 
+from app.core.auth import verify_api_key
 from app.core.database import get_db
 from app.models.options import OptionsContract
 from app.schemas.options import OptionsContractSchema
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(verify_api_key)])
 
 
 @router.get("/chain", response_model=list[OptionsContractSchema])
