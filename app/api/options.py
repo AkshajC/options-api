@@ -27,7 +27,7 @@ def get_options_chain(
 
 @router.get("/filter", response_model=list[OptionsContractSchema])
 def filter_options(
-    ticker: str | None = Query(None, description="Underlying ticker symbol"),
+    ticker: str | None = Query(None, description="Comma-separated ticker symbols, e.g. AAPL,TSLA"),
     option_type: str | None = Query(None, pattern="^(call|put)$", description="call or put"),
     min_strike: float | None = Query(None, ge=0),
     max_strike: float | None = Query(None, ge=0),
@@ -40,7 +40,8 @@ def filter_options(
     q = db.query(OptionsContract)
 
     if ticker is not None:
-        q = q.filter(OptionsContract.ticker == ticker.upper())
+        tickers = [t.strip().upper() for t in ticker.split(",") if t.strip()]
+        q = q.filter(OptionsContract.ticker.in_(tickers))
     if option_type is not None:
         q = q.filter(OptionsContract.option_type == option_type)
     if min_strike is not None:
