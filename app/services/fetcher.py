@@ -38,6 +38,16 @@ def _fetch_chain_with_retry(yticker: yf.Ticker, expiry: str) -> object:
     raise RuntimeError(f"Failed to fetch chain after {_MAX_RETRIES} attempts") from last_exc
 
 
+def fetch_stock_price(ticker: str) -> float | None:
+    """Return the last traded price for *ticker*, or None on failure."""
+    try:
+        price = yf.Ticker(ticker.upper()).fast_info.last_price
+        return float(price) if price is not None else None
+    except Exception as exc:
+        log.warning("fetch_stock_price.error", ticker=ticker, error=str(exc))
+        return None
+
+
 def fetch_options_chain(ticker: str) -> list[dict]:
     """
     Fetch the full options chain for *ticker* via yfinance.
