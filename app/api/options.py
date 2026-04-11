@@ -144,3 +144,17 @@ def get_options_summary(
         "max_volume_contract": max_vol_row.contract_symbol if max_vol_row else None,
         "available_expiries": [exp[0].strftime("%Y-%m-%d") for exp in expiries],
     }
+
+
+@router.get("/expirations")
+def get_expirations(
+    ticker: str = Query(..., description="Underlying ticker symbol, e.g. AAPL"),
+    db: Session = Depends(get_db),
+):
+    expiries = (
+        db.query(distinct(OptionsContract.expiry_date))
+        .filter(OptionsContract.ticker == ticker.upper())
+        .order_by(OptionsContract.expiry_date)
+        .all()
+    )
+    return [exp[0].strftime("%Y-%m-%d") for exp in expiries]
