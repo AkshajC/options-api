@@ -1,6 +1,7 @@
 from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Query
+from sqlalchemy import distinct, func
 from sqlalchemy.orm import Session
 
 from app.core.auth import verify_api_key
@@ -80,3 +81,66 @@ def get_options_history(
         .order_by(OptionsContract.snapshot_time, OptionsContract.strike_price)
         .all()
     )
+
+
+@router.get("/summary")
+def get_options_summary(
+    ticker: str = Query(..., description="Underlying ticker symbol, e.g. AAPL"),
+    db: Session = Depends(get_db),
+):
+    ticker = ticker.upper()
+    base = db.query(OptionsContract).filter(OptionsContract.ticker == ticker)
+
+    total_contracts = base.count()
+    if total_contracts == 0:
+        return {
+            "ticker": ticker,
+            "total_contracts": 0,
+            "call_count": 0,
+            "put_count": 0,
+            "put_call_ratio": None,
+            "avg_implied_volatility": None,
+            "avg_delta": None,
+            "max_volume_contract": None,
+            "available_expiries": [],
+        }
+
+    call_count = base.filter(OptionsContract.option_type == "call").count()
+    put_count = base.filter(OptionsContract.option_type == "put").count()
+
+    put_call_ratio = round(put_count / call_count, 2) if call_count > 0 else None
+
+    avg_iv = db.query(func.avg(OptionsContract.implied_volatility)).filter(
+        OptionsContract.ticker == ticker,
+        OptionsContract.implied_volatility.isnot(None),
+    ).scalar()
+
+    avg_delta = db.query(func.avg(OptionsContract.delta)).filter(
+        OptionsContract.ticker == ticker,
+        OptionsContract.delta.isnot(None),
+    ).scalar()
+
+    max_vol_row = (
+        base.filter(OptionsContract.volume.isnot(None))
+        .order_by(OptionsContract.volume.desc())
+        .first()
+    )
+
+    expiries = (
+        db.query(distinct(OptionsContract.expiry_date))
+        .filter(OptionsContract.ticker == ticker)
+        .order_by(OptionsContract.expiry_date)
+        .all()
+    )
+
+    return {
+        "ticker": ticker,
+        "total_contracts": total_contracts,
+        "call_count": call_count,
+        "put_count": put_count,
+        "put_call_ratio": put_call_ratio,
+        "avg_implied_volatility": round(float(avg_iv), 4) if avg_iv is not None else None,
+        "avg_delta": round(float(avg_delta), 4) if avg_delta is not None else None,
+        "max_volume_contract": max_vol_row.contract_symbol if max_vol_row else None,
+        "available_expiries": [exp[0].strftime("%Y-%m-%d") for exp in expiries],
+    }
