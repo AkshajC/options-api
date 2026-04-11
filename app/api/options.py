@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session
@@ -58,3 +58,25 @@ def filter_options(
         q = q.filter(OptionsContract.implied_volatility <= max_iv)
 
     return q.order_by(OptionsContract.ticker, OptionsContract.expiry_date, OptionsContract.strike_price).all()
+
+
+@router.get("/history", response_model=list[OptionsContractSchema])
+def get_options_history(
+    ticker: str = Query(..., description="Underlying ticker symbol, e.g. AAPL"),
+    start_date: date = Query(..., description="Start of snapshot window (YYYY-MM-DD), inclusive"),
+    end_date: date = Query(default_factory=date.today, description="End of snapshot window (YYYY-MM-DD), inclusive. Defaults to today."),
+    db: Session = Depends(get_db),
+):
+    start_dt = datetime(start_date.year, start_date.month, start_date.day)
+    end_dt = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59)
+
+    return (
+        db.query(OptionsContract)
+        .filter(
+            OptionsContract.ticker == ticker.upper(),
+            OptionsContract.snapshot_time >= start_dt,
+            OptionsContract.snapshot_time <= end_dt,
+        )
+        .order_by(OptionsContract.snapshot_time, OptionsContract.strike_price)
+        .all()
+    )
